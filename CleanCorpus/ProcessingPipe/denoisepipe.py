@@ -20,7 +20,7 @@ import torch
 # ---------------------------------------------------------------------------
 # Respiro-EN – automatic silence / breath detection
 # ---------------------------------------------------------------------------
-RESPIRO_PATH = "/home/mae/Documents/stage_L3_software/respiro_en/Respiro-en"
+RESPIRO_PATH = "/Users/mpopa/master_projects/SupervisedVoiceBM/Respiro-en"
 sys.path.insert(0, RESPIRO_PATH)
 
 from modules import DetectionNet, BreathDetector  # noqa: E402
@@ -127,8 +127,8 @@ def do_command(command):
 # ---------------------------------------------------------------------------
 # Directory configuration – update these to match your local paths
 # ---------------------------------------------------------------------------
-in_dir = "/home/mae/Documents/idmc/master1/university/s2/supervised_project/corpus/Androids-Corpus/Androids-Corpus/Interview-Task/audio/HC"
-out_dir = "/home/mae/Documents/idmc/master1/university/s2/supervised_project/corpus/Androids-Corpus/Androids-Corpus/Interview-Task/audio/HC_cleaned"
+in_dir = "/Users/mpopa/Downloads/Androids-Corpus/HC_sample"
+out_dir = "/Users/mpopa/Downloads/Androids-Corpus/HC_mariacl"
 
 filenames = [f for f in os.listdir(in_dir) if f.lower().endswith(".wav")]
 
@@ -148,7 +148,7 @@ def apply_macro(filenames, in_dir, out_dir, detector):
     """
     # Disable undo history to prevent Audacity from slowing down across files.
     do_command("SetPreference: Name=GUI/MaxUndoLevels Value=0 Reload=0")
-
+    
     for f in filenames:
         input_path = os.path.abspath(os.path.join(in_dir, f))
         output_path = os.path.abspath(os.path.join(out_dir, f))
@@ -161,26 +161,35 @@ def apply_macro(filenames, in_dir, out_dir, detector):
         start, end = find_noise_profile_segment(detector, input_path)
         print(f"    Noise profile segment: {start:.3f}s – {end:.3f}s")
 
-        # Select only the silence segment and tell Audacity to learn the
-        # noise profile from it.  This replaces the manual
-        # "Effect > Noise Reduction > Get Noise Profile" step.
-        do_command(f"SelectTime: Start={start:.4f} End={end:.4f}")
-        do_command("GetNoiseProfile:")
-
-        # --- apply full denoising macro ---
-        # SelectAll restores full-track selection before the macro runs.
-        # The macro's NoiseReduction steps use <Current Settings>, which now
-        # refers to the profile just captured above.
+        # Select only the silence segment and tell Audacity to learn the noise profile
+        
+        # "Get Noise Profile" step command isn't actually recognized by audacity, see 4
+        # Maé's version can be debugged by changing the above command to 4, everything else would be the same
+        
+        # Dropped the macro altogether and applied it as a set of separate instructions
         do_command("SelectAll:")
-        do_command("Macro_Denoiseok:")
-        do_command(f'Export2: Filename="{output_path}" NumChannels=1')
+        do_command('StereoToMono:')
 
-        # Remove the track to free memory before the next file.
+        # 2. High-pass filter
+        do_command('Auhighshelffilter:FREQUENCY="90" ROLLOFF="dB12"')
+
+        # 3. Noise gate
+        do_command('NoiseGate: ATTACK="10" DECAY="100" GATE-FREQ="0" HOLD="50" LEVEL-REDUCTION="-24" MODE="Gate" STEREO-LINK="LinkStereo" THRESHOLD="-40"')
+
+        # 4. Noise reduction (uses profile captured above)
+        do_command("NoiseReduction: Action=Apply")
+
+        # 5. Filter curve EQ
+        do_command('FilterCurve: f0="67.516154" f1="94.215554" f2="101.80691" f3="120.73062" f4="963.29991" f5="2011.3169" f6="3652.7602" f7="6633.7916" f8="10080.842" f9="13324.579" f10="14398.197" f11="15558.322" f12="18593.811" f13="19328.392" f14="20091.994" f15="20405.816" f16="20885.763" FilterLength="8191" InterpolateLin="0" InterpolationMethod="B-spline" v0="-18.42572" v1="-3.3924615" v2="-1.1308193" v3="-0.066518784" v4="1.1308211" v5="1.1308211" v6="1.2638587" v7="0.066518784" v8="-0.33259392" v9="-0.066518784" v10="-2.1951234" v11="-4.0576496" v12="-5.7871413" v13="-8.0487804" v14="-9.379159" v15="-12.305985" v16="-14.966741"')
+
+        # 6. Normalize
+        do_command('Normalize: ApplyVolume="1" PeakLevel="-1" RemoveDcOffset="1" StereoIndependent="0"')
+
+        do_command(f'Export2: Filename="{output_path}" NumChannels=1')
         do_command("SelectAll:")
         do_command("RemoveTracks:")
-
-        # Small pause so Audacity can settle between files.
         time.sleep(0.1)
+       
 
     # Restore undo history to its default after the batch.
     do_command("SetPreference: Name=GUI/MaxUndoLevels Value=10 Reload=0")
