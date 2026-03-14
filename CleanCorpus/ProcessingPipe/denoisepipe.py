@@ -20,7 +20,7 @@ import torch
 # ---------------------------------------------------------------------------
 # Respiro-EN – automatic silence / breath detection
 # ---------------------------------------------------------------------------
-RESPIRO_PATH = "/Users/mpopa/master_projects/SupervisedVoiceBM/Respiro-en"
+RESPIRO_PATH = "/PATH/HERE/Respiro-en"
 sys.path.insert(0, RESPIRO_PATH)
 
 from modules import DetectionNet, BreathDetector  # noqa: E402
@@ -127,8 +127,8 @@ def do_command(command):
 # ---------------------------------------------------------------------------
 # Directory configuration – update these to match your local paths
 # ---------------------------------------------------------------------------
-in_dir = "/Users/mpopa/Downloads/Androids-Corpus/HC_sample"
-out_dir = "/Users/mpopa/Downloads/Androids-Corpus/HC_mariacl"
+in_dir = "/PATH/HERE/Downloads/Androids-Corpus/HC"
+out_dir = "/PATH/HERE/Downloads/Androids-Corpus/HC_ok"
 
 filenames = [f for f in os.listdir(in_dir) if f.lower().endswith(".wav")]
 
