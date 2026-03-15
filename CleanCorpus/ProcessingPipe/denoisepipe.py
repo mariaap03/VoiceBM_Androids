@@ -5,8 +5,9 @@
 
 For each WAV file the pipeline:
   1. Detects breath/silence regions with Respiro-EN (no speech, background noise only).
-  2. Selects the longest detected silence in Audacity and captures the noise profile.
-  3. Runs the Denoiseok macro (which uses <Current Settings> for Noise Reduction).
+  2. Applies noise reduction (×2) in Python using the detected silence as the noise sample.
+  3. Imports the denoised file into Audacity and applies the remaining effects via the
+     scripting pipe: stereo-to-mono, high-pass filter, noise gate, EQ curve, normalization.
   4. Exports the processed file as mono WAV.
 
 Requires Audacity to be running with mod-script-pipe enabled before launching.
@@ -14,7 +15,11 @@ Requires Audacity to be running with mod-script-pipe enabled before launching.
 
 import os
 import sys
+import tempfile
 import time
+
+import noisereduce as nr
+import soundfile as sf
 import torch
 
 # ---------------------------------------------------------------------------
@@ -54,7 +59,7 @@ def find_noise_profile_segment(detector, wav_path, min_duration=MIN_SILENCE_DURA
 
     Uses Respiro-EN to find breath / pause intervals (non-speech regions that
     carry background noise).  The longest qualifying interval is chosen so that
-    Audacity has the most representative noise sample.
+    the noise reduction has the most representative noise sample.
 
     Falls back to the first 0.5 s of the file when:
       - Respiro-EN detects no intervals, or
@@ -76,13 +81,56 @@ def find_noise_profile_segment(detector, wav_path, min_duration=MIN_SILENCE_DURA
 
 
 # ---------------------------------------------------------------------------
+# Python-based noise reduction
+# ---------------------------------------------------------------------------
+
+def denoise_audio(wav_path, noise_start, noise_end):
+    """Apply two-pass noise reduction in Python and return the path to a temp WAV.
+
+    Loads *wav_path*, extracts the silence segment [noise_start, noise_end] as
+    the noise profile, and runs noisereduce twice (matching the original
+    double-pass Audacity macro).  Writes the result to a temporary WAV file
+    and returns its path.  The caller is responsible for deleting the temp file.
+
+    noisereduce expects shape (channels, samples) for multichannel audio.
+    soundfile reads shape (samples, channels), so we transpose before and after.
+    """
+    data, sr = sf.read(wav_path)
+
+    # Transpose to (channels, samples) if stereo, keep 1-D if already mono.
+    multichannel = data.ndim > 1
+    if multichannel:
+        audio = data.T  # (channels, samples)
+        noise_sample = audio[:, int(noise_start * sr):int(noise_end * sr)]
+    else:
+        audio = data
+        noise_sample = audio[int(noise_start * sr):int(noise_end * sr)]
+
+    # Two denoising passes.
+    reduced = nr.reduce_noise(y=audio, sr=sr, y_noise=noise_sample)
+    reduced = nr.reduce_noise(y=reduced, sr=sr, y_noise=noise_sample)
+
+    # Transpose back to (samples, channels) for soundfile.
+    if multichannel:
+        reduced = reduced.T
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    sf.write(tmp.name, reduced, sr)
+    return tmp.name
+
+
+# ---------------------------------------------------------------------------
 # Audacity pipe setup
 # ---------------------------------------------------------------------------
 if sys.platform == "win32":
     TONAME = "\\\\.\\pipe\\ToSrvPipe"
     FROMNAME = "\\\\.\\pipe\\FromSrvPipe"
     EOL = "\r\n\0"
-else:
+elif sys.platform == "darwin":
+    TONAME = "/tmp/audacity_script_pipe.to." + str(os.getuid())
+    FROMNAME = "/tmp/audacity_script_pipe.from." + str(os.getuid())
+    EOL = "\n"
+else:  # Linux
     TONAME = "/tmp/audacity_script_pipe.to." + str(os.getuid())
     FROMNAME = "/tmp/audacity_script_pipe.from." + str(os.getuid())
     EOL = "\n"
@@ -136,14 +184,15 @@ filenames = [f for f in os.listdir(in_dir) if f.lower().endswith(".wav")]
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-def apply_macro(filenames, in_dir, out_dir, detector):
-    """Process every WAV file through the Denoiseok macro.
+def apply_pipeline(filenames, in_dir, out_dir, detector):
+    """Process every WAV file through the full denoising pipeline.
 
     For each file:
-      1. Import into Audacity.
-      2. Find the best silence with Respiro-EN.
-      3. Select that segment and capture the noise profile (GetNoiseProfile:).
-      4. Select all and run the Denoiseok macro (uses <Current Settings>).
+      1. Find the best silence segment with Respiro-EN.
+      2. Apply two-pass noise reduction in Python (noisereduce).
+      3. Import the denoised temp file into Audacity.
+      4. Apply the remaining effects via the scripting pipe:
+           StereoToMono → High-pass filter → Noise gate → EQ curve → Normalize.
       5. Export as mono WAV and remove the track.
     """
     # Disable undo history to prevent Audacity from slowing down across files.
@@ -155,9 +204,7 @@ def apply_macro(filenames, in_dir, out_dir, detector):
 
         print(f"\n--- Processing: {f} ---")
 
-        do_command(f'Import2: Filename="{input_path}"')
-
-        # --- automatic noise profile capture ---
+        # Step 1 – find noise segment.
         start, end = find_noise_profile_segment(detector, input_path)
         print(f"    Noise profile segment: {start:.3f}s – {end:.3f}s")
 
